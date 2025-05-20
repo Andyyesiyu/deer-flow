@@ -524,10 +524,10 @@ Esse projeto é open source e disponível sob a [MIT License](./LICENSE).
 
 DeerFlow é construído através do incrível trabalho da comunidade open-source. Nós somos profundamente gratos a todos os projetos e contribuidores cujos esforços tornaram o DeerFlow possível. Realmente, nós estamos apoiados nos ombros de gigantes.
 
-Nós gostaríamos de extender nossos sinceros agradecimentos aos seguintes projetos por suas invaloráveis contribuições:
+Nós gostaríamos de estender nossos sinceros agradecimentos aos seguintes projetos por suas invaloráveis contribuições:
 
 - **[LangChain](https://github.com/langchain-ai/langchain)**: O framework excepcional deles empodera nossas interações via LLM e correntes, permitindo uma integração perfeita e funcional.
-- **[LangGraph](https://github.com/langchain-ai/langgraph)**: A abordagem inovativa para orquestração multi-agente deles tem sido foi fundamental em permitir o acesso dos fluxos de trabalho sofisticados do DeerFlow.
+- **[LangGraph](https://github.com/langchain-ai/langgraph)**: A abordagem inovativa para orquestração multi-agente deles tem sido fundamental em permitir o acesso dos fluxos de trabalho sofisticados do DeerFlow.
 
 Esses projetos exemplificam o poder transformador da colaboração open-source, e nós temos orgulho de construir baseado em suas fundações.
 
