@@ -1,280 +1,168 @@
-# DeerFlow: From Deep Research to Super Agent Harness
+# DeerFlow 2.0 vs LangChain Deep Agents SDK
 
-> 架构演进大纲 — 从 1.0 到 2.0 的核心变革
-
----
-
-## 一、开篇：为什么要重写
-
-### 1.1 1.0 的成功与局限
-
-- DeerFlow 1.0 定位：**Deep Research Framework**（深度研究框架）
-- 社区超预期使用：数据管道、PPT 生成、Dashboard 搭建、内容工作流……
-- 核心洞察：DeerFlow 不只是研究工具，而是一个 **Agent 运行时容器（Harness）**
-
-### 1.2 重写的决心
-
-- "DeerFlow 2.0 is a ground-up rewrite. It shares no code with v1."
-- 不是渐进式重构，而是**从零开始的架构革新**
-- 1.x 分支继续维护，2.0 成为主线
+> DeerFlow 2.0 和 Deep Agents 共享同一个 DNA：都基于 LangGraph，都自称 "Agent Harness"，
+> 都有 `task` 工具 / `write_todos` / 文件系统工具 / Subagent / Memory。
+>
+> 功能清单几乎一模一样。所以真正的问题是：**相同的功能列表下，DeerFlow 多做了什么？**
 
 ---
 
-## 二、架构对比：1.0 vs 2.0
+## 一句话区分
 
-### 2.1 Agent 模型
+**Deep Agents 是一个 SDK（库），DeerFlow 是一个 Platform（平台）。**
 
-| | 1.0 | 2.0 |
+- Deep Agents 给你 `create_deep_agent()` 函数，其余自己搭。
+- DeerFlow 给你一个 `make serve` 就能跑的完整产品。
+
+类比：**Deep Agents 之于 DeerFlow ≈ Express.js 之于 Next.js**
+
+---
+
+## 总览对比
+
+| 维度 | Deep Agents SDK | DeerFlow 2.0 |
+|------|----------------|--------------|
+| **本质** | Python 库（pip install） | 全栈平台（4 个服务） |
+| **创建 Agent** | `create_deep_agent(tools, prompt)` | `make_lead_agent(config)` — 从 YAML 自动装配模型、工具、11 个中间件、提示词 |
+| **前端** | 无 | 完整 Next.js 16 应用（聊天 / Artifact 预览 / Skill 管理 / MCP 配置 / 记忆查看 / 暗色模式 / 中英双语） |
+| **REST API** | 无 | Gateway API — 40+ 端点（模型 / MCP / Skill / 文件上传下载 / 记忆） |
+| **部署** | 自己搭 | Docker 一键启动（Nginx + LangGraph + Gateway + Frontend） |
+
+---
+
+## 逐项深入
+
+### 1. 中间件系统 — DeerFlow 最大的架构差异
+
+Deep Agents 提供基础中间件结构。DeerFlow 在此之上自研了 **8 个生产级中间件**，解决 Deep Agents 没有触及的工程问题：
+
+| 中间件 | 解决什么问题 | Deep Agents 有吗 |
+|--------|-------------|-----------------|
+| **ThreadDataMiddleware** | 每个线程隔离的 workspace / uploads / outputs 目录 | 无 |
+| **UploadsMiddleware** | 自动检测新上传文件，注入到 Agent 上下文 | 无 |
+| **DanglingToolCallMiddleware** | 用户中途取消时，修复残缺的 tool call 历史 | 无 |
+| **TitleMiddleware** | 首次对话后用轻量模型自动生成会话标题 | 无 |
+| **MemoryMiddleware** | 异步防抖的长期记忆更新队列 | 不同方案 |
+| **ViewImageMiddleware** | 视觉模型自动注入 base64 图片到 LLM 输入 | 无 |
+| **SubagentLimitMiddleware** | **物理截断**超额的 Subagent 调用（不靠提示词） | 无 |
+| **ClarificationMiddleware** | 拦截澄清请求，中断 Agent 执行流返回用户 | 仅有工具，无执行流中断 |
+
+这些不是锦上添花 —— 它们解决的是真实生产环境的 edge case：
+- 用户刷新页面导致 tool call 中断 → `DanglingToolCallMiddleware` 自动修复
+- LLM 一口气要启动 10 个子任务 → `SubagentLimitMiddleware` 物理截断到 3 个
+- 需要问用户才能继续 → `ClarificationMiddleware` 中断 Agent 循环，等用户回答后恢复
+
+**核心理念：Prompt 是建议，Middleware 是保证。**
+
+---
+
+### 2. 记忆系统
+
+| | Deep Agents | DeerFlow 2.0 |
 |---|---|---|
-| 架构模式 | 多 Agent 工作流图 | 单 Lead Agent + 动态 Subagent |
-| Agent 角色 | Researcher / Coder / Planner / Coordinator / Reviewer | Lead Agent（全能编排者）+ general-purpose / bash Subagent |
-| 编排方式 | 预定义图结构，固定路径 | 运行时动态分解，按需生成 |
-| 扩展方式 | 新增 Agent 类型 | 新增 Skill / Tool / MCP Server |
+| **存储** | LangGraph Memory Store（结构化 KV） | 自研 JSON + LLM 提取 |
+| **更新** | Agent 主动写入 | **全自动**：中间件静默 → 防抖队列(30s) → LLM 批量提取 |
+| **数据结构** | 开发者自定义 | 预定义：workContext / personalContext / topOfMind + facts[]（带 confidence 评分） |
+| **注入** | 开发者自己实现 | 自动：top-15 facts → `<memory>` 标签 → 系统提示词（max 2000 tokens） |
 
-**核心转变**：从 "定义 Agent 是谁" → "定义 Agent 能做什么"
-
-### 2.2 执行模型
-
-**1.0：顺序流水线**
-```
-用户 → Planner → Researcher → Coder → Reviewer → 输出
-                    ↑              ↓
-                    └── 循环修正 ──┘
-```
-
-**2.0：动态分解 + 并行执行**
-```
-用户 → Lead Agent → 分析 → 分解为 N 个子任务
-                         → 并行启动 ≤3 个 Subagent
-                         → 收集结果 → 综合输出
-                    （如果 >3 个子任务，分批执行）
-```
-
-- 关键优势：不再受限于预设流程，任何任务都能处理
-
-### 2.3 部署架构
-
-**1.0**：单体服务
-
-**2.0**：四服务架构
-```
-Nginx (2026) — 统一入口
-├── LangGraph Server (2024)  — Agent 运行时
-├── Gateway API (8001)       — REST API（模型/MCP/技能/文件/记忆）
-└── Frontend (3000)          — Next.js 完整 Web 应用
-```
+DeerFlow 的记忆是**零配置的全自动流程** —— Agent 不需要显式调用"保存记忆"，中间件在对话结束后静默完成一切。
 
 ---
 
-## 三、2.0 的五大核心创新
+### 3. MCP 生态集成
 
-### 3.1 中间件链架构（Middleware Chain）
+| | Deep Agents | DeerFlow 2.0 |
+|---|---|---|
+| **协议支持** | 可能有基础支持 | 多服务器、多协议（stdio / SSE / HTTP），支持自定义 Headers 和环境变量 |
+| **配置方式** | 代码中手动配置 | `extensions_config.json` 声明式，Gateway API 热更新 |
+| **缓存策略** | 未知 | 基于 mtime 的懒加载缓存，跨进程感知（Gateway 改配置 → LangGraph 自动刷新） |
+| **管理界面** | 无 | 前端 UI 可视化管理 |
 
-- **1.0 的问题**：跨 Agent 的通用逻辑（记忆、上下文压缩、文件处理）分散在各处
-- **2.0 的方案**：11 个中间件按严格顺序组成流水线，覆盖 Agent 完整生命周期
+意味着**非开发者也能通过 UI 添加 / 启用 / 禁用 MCP 服务器**。
 
-**中间件清单**（按执行顺序）：
-1. ThreadDataMiddleware — 线程隔离目录
-2. UploadsMiddleware — 文件上传感知
-3. SandboxMiddleware — 沙箱获取
-4. DanglingToolCallMiddleware — 中断修复
-5. SummarizationMiddleware — 上下文压缩（可选）
-6. TodoListMiddleware — 任务跟踪（可选）
-7. TitleMiddleware — 自动标题生成
-8. MemoryMiddleware — 异步记忆更新
-9. ViewImageMiddleware — 视觉能力注入（可选）
-10. SubagentLimitMiddleware — 并发硬限制（可选）
-11. ClarificationMiddleware — 澄清中断（必须最后）
+---
 
-**核心优势**：
-- 关注点分离，每个中间件只做一件事
-- 条件组合：根据运行时配置动态注入
-- 不靠提示词约束行为，靠中间件**物理保证**（如并发限制通过截断 tool call 实现）
+### 4. Skill 系统 — Deep Agents 没有的能力层
 
-### 3.2 沙箱执行环境（Sandbox）
-
-- **1.0**：Agent 只有"工具调用"能力
-- **2.0**：Agent 拥有**一台完整的计算机**
-
-```
-/mnt/user-data/
-├── uploads/      ← 用户上传的文件
-├── workspace/    ← 工作区
-└── outputs/      ← 最终交付物
-```
-
-关键设计点：
-- Provider 模式：Local / Docker / Kubernetes 可插拔
-- 虚拟路径转译：Agent 看到的路径与物理路径解耦
-- 懒初始化：不调工具不创建沙箱
-- 上下文继承：Subagent 复用父 Agent 的沙箱
-
-### 3.3 Skill 系统（渐进式能力扩展）
-
-- **1.0**：能力硬编码在 Agent 角色中
-- **2.0**：能力模块化为可插拔的 Skill
+DeerFlow 的 Skill 系统解决了一个关键问题：**如何在不膨胀系统提示词的前提下扩展 Agent 能力？**
 
 ```
 skills/
-├── public/                  ← 内置技能
-│   ├── research/SKILL.md
-│   ├── slide-creation/SKILL.md
-│   └── web-page/SKILL.md
-└── custom/                  ← 用户自定义
-    └── my-skill/SKILL.md
+├── public/           ← 内置（research / slide-creation / web-page / ...）
+│   └── research/
+│       └── SKILL.md  ← YAML frontmatter + Markdown 指令
+└── custom/           ← 用户自定义（gitignored）
 ```
 
-核心设计：
-- **渐进加载**：启动时只注入名称+描述（几十 tokens），需要时才读取完整指令
-- **声明式定义**：SKILL.md = YAML 元数据 + Markdown 指令
-- **运行时管理**：通过 UI 或 API 动态启用/禁用/安装
+- **渐进加载**：启动时只注入名称 + 描述（几十 tokens），需要时才读取完整指令
+- **声明式**：SKILL.md 定义元数据（名称、描述、允许的工具）
+- **运行时管理**：UI 或 API 动态启用 / 禁用 / 安装
 
-### 3.4 长期记忆系统（Memory）
-
-- **1.0**：对话结束即遗忘
-- **2.0**：跨会话持久记忆
-
-```json
-{
-  "user": {
-    "workContext": "用户正在做数据分析项目...",
-    "personalContext": "偏好 Python，简洁风格...",
-    "topOfMind": "近期关注 RAG 优化..."
-  },
-  "facts": [
-    { "content": "用户的项目用 FastAPI", "confidence": 0.9, "category": "knowledge" }
-  ]
-}
-```
-
-核心设计：
-- **全自动**：Agent 无需主动"保存"，中间件静默完成
-- **异步防抖**：30 秒批量处理，不阻塞对话
-- **LLM 提取**：不存原文，用 LLM 提取结构化 facts + context
-- **启动注入**：下次对话时 top-15 facts 自动注入系统提示词
-
-### 3.5 工具生态（三层扩展）
-
-- **1.0**：固定工具集
-- **2.0**：三层可扩展工具体系
-
-```
-┌─────────────────────────────────────────┐
-│  Layer 1: 配置工具 (config.yaml)        │
-│  bash / read_file / write_file /        │
-│  web_search / web_fetch / ...           │
-├─────────────────────────────────────────┤
-│  Layer 2: MCP 工具 (extensions_config)  │
-│  任何 MCP Server（stdio/SSE/HTTP）      │
-│  UI 可视化管理，热更新无需重启           │
-├─────────────────────────────────────────┤
-│  Layer 3: 内置工具 (always on)          │
-│  present_files / ask_clarification /    │
-│  view_image / task（Subagent 委托）     │
-└─────────────────────────────────────────┘
-```
+Deep Agents 没有这层抽象 —— 所有能力要么写进提示词，要么编码到工具定义里。
 
 ---
 
-## 四、2.0 独有的工程亮点
+### 5. 沙箱隔离
 
-### 4.1 澄清优先（Clarify-First）
+| | Deep Agents | DeerFlow 2.0 |
+|---|---|---|
+| **接口** | 基础抽象 | `SandboxProvider` 抽象 + Local / Docker / Kubernetes 三种实现 |
+| **路径系统** | 直接路径 | **虚拟路径转译**：Agent 看到 `/mnt/user-data/workspace`，实际映射到 `threads/{id}/user-data/workspace` |
+| **生命周期** | 未知 | 懒初始化 + 线程内复用 + Subagent 继承父沙箱 |
 
-- 不是"先做再问"，而是"不确定就先问"
-- ClarificationMiddleware 通过 `wrap_tool_call` 拦截执行，返回 `Command(goto=END)` 中断 Agent 循环
-- 用户回答后 Agent 恢复执行
-- **区别于所有其他框架**：执行流程中的优雅中断机制
+虚拟路径系统让 Agent 提示词中的路径和真实路径完全解耦，方便在本地开发和容器部署之间无缝切换。
 
-### 4.2 双保险行为约束
+---
 
-- 提示词层面："最多 3 个并行子任务"
-- 中间件层面：`SubagentLimitMiddleware` 物理截断超额调用
-- **Prompt 是建议，Middleware 是保证**
+### 6. Subagent 执行引擎
 
-### 4.3 上下文工程
+| | Deep Agents | DeerFlow 2.0 |
+|---|---|---|
+| **`task` 工具** | 有 | 有，但增加了完整的执行引擎 |
+| **并发控制** | 无（依赖提示词） | 双线程池（调度 3 + 执行 3）+ 中间件硬截断 |
+| **超时** | 未知 | 每任务 15 分钟，可配置 |
+| **上下文共享** | 未知 | Subagent **复用父 Agent 的沙箱和文件目录** |
+| **实时进度** | 未知 | SSE 流式事件：`task_started` → `task_running` → `task_completed` |
+| **分布式追踪** | 无 | `trace_id` 在父子 Agent 间继承传递 |
 
-- SummarizationMiddleware：上下文接近 token 限制时自动压缩
-- Subagent 上下文隔离：子任务不会污染主 Agent 的上下文窗口
-- 渐进式 Skill 加载：按需加载，不预占上下文
-- 文件系统充当"外部记忆"：中间结果写入文件，而非堆积在上下文中
+---
 
-### 4.4 完整的前端体验
+### 7. 前端 — Deep Agents 完全没有的维度
 
-- Next.js 16 + React 19 全栈 Web 应用
+DeerFlow 附带完整的 Next.js 16 + React 19 Web 应用：
+
 - 实时流式渲染（LangGraph SDK SSE）
-- Artifact 双视图（代码/预览）
+- Artifact 双视图（代码 / iframe 预览）
 - Chain of Thought 可折叠展示
-- Subagent 任务卡片实时进度
-- 文件上传（自动转换 PDF/PPT/Excel/Word → Markdown）
-- Skill 安装/管理 UI
+- Subagent 任务卡片 + 实时进度
+- 文件上传（自动转换 PDF / PPT / Excel / Word → Markdown）
+- Skill 安装 / 管理 UI
 - MCP Server 配置 UI
 - 记忆查看器
 - 中英双语 + 暗色模式
+- Desktop 通知
 
 ---
 
-## 五、与竞品的定位差异
+## 选择建议
 
-### 5.1 vs. 其他 Agent 框架（CrewAI / AutoGen / AutoGPT）
+```
+选 Deep Agents 如果你：
+├── 在做 Agent 研究 / 原型验证
+├── 已有自己的前端和 API 层
+├── 需要最大的底层控制权
+└── 偏好 "库" 而非 "框架"
 
-> 其他框架给你 Agent 的骨架，DeerFlow 给你 Agent 的整个身体。
-
-- 其他框架：定义 Agent + 编排协作 → 你自己搭基础设施
-- DeerFlow：开箱即用的完整平台 → 沙箱、记忆、前端、API 全部就绪
-
-### 5.2 vs. LangChain Deep Agents SDK
-
-> Deep Agents 是 SDK，DeerFlow 是 Platform。
-
-- Deep Agents：`create_deep_agent()` → 你需要自己搭建其余一切
-- DeerFlow：`make serve` → 一个可部署的完整产品
-
-| 维度 | Deep Agents | DeerFlow 2.0 |
-|------|-------------|--------------|
-| 本质 | Python 库 | 全栈平台 |
-| 前端 | 无 | 完整 Next.js 应用 |
-| REST API | 无 | 40+ 端点的 Gateway |
-| MCP 集成 | 基础 | 多服务器、多协议、UI 管理 |
-| Skill 系统 | 无 | 渐进加载、声明式定义 |
-| 自研中间件 | 0 | 8 个生产级中间件 |
-| 部署方案 | 自己搭 | Docker 一键启动 |
-
-### 5.3 vs. 原生 LangGraph
-
-> LangGraph 是引擎，DeerFlow 是整车。
-
-- LangGraph：提供图结构和状态机原语 → 最大灵活性，最少内置
-- DeerFlow：在 LangGraph 之上构建完整的 Agent 运行时 → 牺牲部分灵活性，换取开箱即用
+选 DeerFlow 2.0 如果你：
+├── 需要一个可直接部署的完整产品
+├── 用户需要 Web UI 交互
+├── 需要 MCP 生态 + Skill 扩展
+├── 关心生产环境的 edge case（中断恢复、并发控制、记忆持久化）
+└── 不想从零搭建全栈基础设施
+```
 
 ---
 
-## 六、适用场景
+## 一句话定位
 
-### 选 DeerFlow 2.0 的理由
-
-- 需要 Agent **真正执行代码和操作文件**（不只是聊天）
-- 任务复杂，需要**多步骤分解和并行执行**
-- 需要**生产级部署**（沙箱隔离、持久记忆、完整 UI）
-- 想要**开箱即用**但保留完全可扩展性
-- 需要接入 **MCP 生态**
-- 团队或用户需要 **Web 界面**交互
-
-### 一句话定位
-
-> **DeerFlow 2.0 — 不只是一个 Agent 框架，而是一个让 Agent 真正能干活的运行时平台。**
-
----
-
-## 七、未来展望
-
-> （根据项目规划补充）
-
-- [ ] 更多内置 Skill
-- [ ] 多用户协作
-- [ ] Agent 间通信协议
-- [ ] 更丰富的沙箱环境
-- [ ] 企业级权限与审计
-
----
-
-*文档版本：Draft v0.1 | 基于 DeerFlow 2.0 代码库分析*
+> **Deep Agents 给你路由和中间件原语，你自己搭应用。DeerFlow 给你一个开箱即用的全栈方案，同时保留了底层的可扩展性。**
